@@ -30,10 +30,18 @@ class Couchdb < Formula
     depends_on "help2man" => :build
   end
 
+  option "with-geocouch", "Build with GeoCouch spatial index extension"
+
   depends_on "spidermonkey"
   depends_on "icu4c"
   depends_on "erlang"
   depends_on "curl" if MacOS.version <= :leopard
+
+  resource "geocouch" do
+    url "https://github.com/couchbase/geocouch.git",
+      :branch => "couchdb1.3.x",
+      :revision =>"a3827d97feeeea9b1b19a699d864bcef019bef4a"
+  end
 
   def install
     # CouchDB >=1.3.0 supports vendor names and versioning
@@ -59,16 +67,52 @@ class Couchdb < Formula
                           "--with-js-lib=#{HOMEBREW_PREFIX}/lib"
     system "make"
     system "make", "install"
+    mkdir pkgshare/"etc"
+    (pkgshare/"etc").install("etc/launchd")
+    install_geocouch if build.with? "geocouch"
 
     # Use our plist instead to avoid faffing with a new system user.
     (prefix/"Library/LaunchDaemons/org.apache.couchdb.plist").delete
     (lib/"couchdb/bin/couchjs").chmod 0755
-    (var/"lib/couchdb").mkpath
-    (var/"log/couchdb").mkpath
-    (var/"run/couchdb").mkpath
+  end
+
+  def geocouch_share
+    share/"couchdb-geocouch"
+  end
+
+  def install_geocouch
+    resource("geocouch").stage(buildpath/"geocouch")
+    ENV["COUCH_SRC"]="#{buildpath}/src/couchdb"
+    cd "geocouch" do
+      system "make"
+
+      geocouch_share.mkpath
+      geocouch_share.install "ebin"
+      #  Install geocouch.ini into couchdb.
+      (etc/"couchdb/default.d").install "etc/couchdb/default.d/geocouch.ini"
+
+      #  Install tests into couchdb.
+      test_files = Dir["share/www/script/test/*.js"]
+      (pkgshare/"www/script/test").install test_files
+      #  Complete the install by referencing the geocouch tests in couch_tests.js
+      #  (which runs the tests).
+      test_lines = ["//  GeoCouch Tests..."]
+      test_lines.concat(test_files.map { |file| file.gsub(%r{^.*\/(.*)$}, 'loadTest("\1");') })
+      test_lines << "//  ...GeoCouch Tests"
+      (pkgshare/"www/script/couch_tests.js").append_lines test_lines
+
+      #  Wrapper script to pick up needed libs
+      mkdir libexec
+      mv bin/"couchdb", libexec/"couchdb"
+      (bin/"couchdb").write_env_script("#{libexec}/couchdb",
+        :ERL_LIBS => geocouch_share, :ERL_FLAGS => "-pa #{geocouch_share}/ebin")
+    end
   end
 
   def post_install
+    (var/"lib/couchdb").mkpath
+    (var/"log/couchdb").mkpath
+    (var/"run/couchdb").mkpath
     # default.ini is owned by CouchDB and marked not user-editable
     # and must be overwritten to ensure correct operation.
     if (etc/"couchdb/default.ini.default").exist?
@@ -78,38 +122,46 @@ class Couchdb < Formula
     end
   end
 
-  def caveats; <<-EOS.undent
-    To test CouchDB run:
-        curl http://127.0.0.1:5984/
-
-    The reply should look like:
-        {"couchdb":"Welcome","uuid":"....","version":"#{version}","vendor":{"version":"#{version}-1","name":"Homebrew"}}
-    EOS
-  end
-
   plist_options :manual => "couchdb"
 
-  def plist; <<-EOS.undent
-    <?xml version="1.0" encoding="UTF-8"?>
-    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-    <plist version="1.0">
-    <dict>
-      <key>KeepAlive</key>
-      <true/>
-      <key>Label</key>
-      <string>#{plist_name}</string>
-      <key>ProgramArguments</key>
-      <array>
-        <string>#{opt_bin}/couchdb</string>
-      </array>
-      <key>RunAtLoad</key>
-      <true/>
-    </dict>
-    </plist>
-    EOS
+  def plist
+    linked_geocouch_share = (HOMEBREW_PREFIX/"share/couchdb-geocouch")
+    if build.with? "geocouch"
+      s = File.read(pkgshare/"etc/launchd/org.apache.couchdb.plist.tpl.in")
+      s.gsub! "<string>org.apache.couchdb</string>", \
+        "<string>geocouch</string>"
+      s.gsub! "<key>HOME</key>", <<-EOS.lstrip.chop
+        <key>ERL_FLAGS</key>
+        <string>-pa #{linked_geocouch_share}/ebin</string>
+        <key>HOME</key>
+      EOS
+      s.gsub! "%bindir%/%couchdb_command_name%", \
+        HOMEBREW_PREFIX/"bin/couchdb"
+      s
+    else
+      <<-EOS.undent
+      <?xml version="1.0" encoding="UTF-8"?>
+      <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+      <plist version="1.0">
+      <dict>
+        <key>Label</key>
+        <string>#{plist_name}</string>
+        <key>ProgramArguments</key>
+        <array>
+          <string>#{opt_bin}/couchdb</string>
+        </array>
+        <key>RunAtLoad</key>
+        <true/>
+        <key>KeepAlive</key>
+        <true/>
+      </dict>
+      </plist>
+      EOS
+    end
   end
 
   test do
+    require "utils/json"
     # ensure couchdb embedded spidermonkey vm works
     system "#{bin}/couchjs", "-h"
 
@@ -125,7 +177,10 @@ class Couchdb < Formula
     sleep 2
 
     begin
-      assert_match /Homebrew/, shell_output("curl localhost:5984")
+      response = shell_output("curl --silent localhost:5984")
+      assert_match /Homebrew/, response
+      json = Utils::JSON.load(response)
+      assert_match json["vendor"]["version"], pkg_version
     ensure
       Process.kill("SIGINT", pid)
       Process.wait(pid)
