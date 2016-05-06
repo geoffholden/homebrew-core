@@ -28,22 +28,23 @@ diff -ur ditaa-0.10/build/release.xml ditaa-0.10.patched/build/release.xml
 --- ditaa-0.10/build/release.xml
 +++ ditaa-0.10.patched/build/release.xml
 @@ -5,7 +5,7 @@
-	</description>
-
-	<property name="rootDir" value=".."/>
+ 	</description>
+     
+ 	<property name="rootDir" value=".."/>
 -	<property name="version.string" value="0_9"/>
 +	<property name="version.string" value="0_10"/>
-
-	<target name="release-all" depends="release-zip,release-src" />
-
+ 	
+ 	<target name="release-all" depends="release-zip,release-src" />
+ 	
 diff -ur ditaa-0.10/src/org/stathissideris/ascii2image/core/CommandLineConverter.java ditaa-0.10.patched/src/org/stathissideris/ascii2image/core/CommandLineConverter.java
 --- ditaa-0.10/src/org/stathissideris/ascii2image/core/CommandLineConverter.java
 +++ ditaa-0.10.patched/src/org/stathissideris/ascii2image/core/CommandLineConverter.java
 @@ -46,7 +46,7 @@
   */
  public class CommandLineConverter {
-
+ 		
 -	private static String notice = "ditaa version 0.9, Copyright (C) 2004--2009  Efstathios (Stathis) Sideris";
 +	private static String notice = "ditaa version 0.10, Copyright (C) 2004--2009  Efstathios (Stathis) Sideris";
-
-	private static String[] markupModeAllowedValues = {"use", "ignore", "render"};
+ 	
+ 	private static String[] markupModeAllowedValues = {"use", "ignore", "render"};
+ 	
